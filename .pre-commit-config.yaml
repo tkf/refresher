@@ -1,0 +1,22 @@
+repos:
+-   repo: https://github.com/timothycrosley/isort
+    rev: 5.5.3
+    hooks:
+    -   id: isort
+        files: \.pyi?$
+        types: []
+    # See:
+    # * https://github.com/timothycrosley/isort
+    # * https://github.com/timothycrosley/isort/blob/develop/.pre-commit-hooks.yaml
+    # * https://github.com/timothycrosley/isort/releases
+-   repo: https://github.com/psf/black
+    rev: 20.8b1
+    hooks:
+    -   id: black
+        files: \.pyi?$
+        types: []
+    # See:
+    # * https://black.readthedocs.io/en/stable/version_control_integration.html
+    # * https://github.com/psf/black/blob/master/.pre-commit-hooks.yaml
+    # * https://github.com/psf/black/issues/402
+    # * https://github.com/psf/black/releases
