@@ -9,4 +9,5 @@
 /build
 /dist
 /doc/build
+/refresher.symlink
 /src/*.egg-info

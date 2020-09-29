@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+thisdir="$(dirname "$(readlink "${BASH_SOURCE[0]}")")"
+symlink="$thisdir/refresher.symlink"
+origdir="$PWD"
+if [ ! -x "$symlink" ]
+then
+    cd "$thisdir"
+    ln -f -s "$(poetry run which refresher)" "$symlink"
+    cd "$origdir"
+fi
+
+exec "$symlink" "$@"
