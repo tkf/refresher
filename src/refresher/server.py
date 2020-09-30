@@ -51,7 +51,7 @@ script_livereload_js = """
 """
 
 
-def inject_livereload_js(content, port=8000):
+def inject_livereload_js(content, port):
     m = html_tag_re.search(content)
     if not m:
         return script_livereload_js.format(port=port) + content  # FIXME
@@ -76,10 +76,12 @@ async def serve_file(pagepath):
     content = filepath.read_text()
     if filepath.suffix.lower() not in (".html", ".htm"):
         return content
-    return inject_livereload_js(content)
+    port = app.config["REFRESHER_PORT"]  # FIXME
+    return inject_livereload_js(content, port)
 
 
-async def start_server(root=".", debug=True, port=8000):
+async def start_server(root, debug, port):
+    app.config["REFRESHER_PORT"] = port
     app.config["REFRESHER_ROOT"] = Path(root)
     app.config["DEBUG"] = debug
 
