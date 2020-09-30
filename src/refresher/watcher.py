@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import trio
-from watchdog.events import FileModifiedEvent, FileSystemEventHandler
+from watchdog.events import EVENT_TYPE_DELETED, EVENT_TYPE_MOVED, FileSystemEventHandler
 from watchdog.observers import Observer
 
 if TYPE_CHECKING:
@@ -37,11 +37,17 @@ class EventTranslator(FileSystemEventHandler):
         self.file_event_sender = file_event_sender
         self.trio_token = trio.lowlevel.current_trio_token()
 
-    def on_modified(self, event):
-        if isinstance(event, FileModifiedEvent):
-            trio.from_thread.run(
-                self.file_event_sender.send, event, trio_token=self.trio_token
-            )
+    def on_any_event(self, event):
+        if event.event_type == EVENT_TYPE_DELETED:
+            return
+        elif event.is_directory:
+            return
+
+        trio.from_thread.run(
+            self.file_event_sender.send, event, trio_token=self.trio_token
+        )
+        # See:
+        # * https://python-watchdog.readthedocs.io
 
 
 @dataclasses.dataclass
@@ -137,7 +143,12 @@ async def watcher_loop(
             "No file changes happened within delay=%r seconds. Requesting reload...",
             delay,
         )
-        req = ReloadRequest(event.src_path)
+        if event.event_type == EVENT_TYPE_MOVED:
+            path = event.dest_path
+        else:
+            # Created or modified
+            path = event.src_path
+        req = ReloadRequest(path)
         try:
             await reload_sender.send(req)
         except trio.ClosedResourceError:
