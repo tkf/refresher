@@ -1,15 +1,13 @@
 import json
 import re
-from math import inf
 from pathlib import Path
 
-import trio
 from hypercorn.config import Config
 from hypercorn.trio import serve
 from quart import websocket
 from quart_trio import QuartTrio
-from watchdog.events import FileModifiedEvent, FileSystemEventHandler
-from watchdog.observers import Observer
+
+from .watcher import open_watcher
 
 app = QuartTrio(__name__)
 # TODO: ASGI app
@@ -17,7 +15,7 @@ app = QuartTrio(__name__)
 
 @app.websocket("/livereload")
 async def livereload_websocket():
-    receive_channel = app.config["REFRESHER_RELOAD_RECEIVE_CHANNEL"]
+    watcher = app.config["REFRESHER_WATCHER"]
     data = await websocket.receive()
     app.logger.debug(f"livereload_websocket: {data =}")
     handshake_reply = {
@@ -27,16 +25,13 @@ async def livereload_websocket():
     }
     await websocket.send(json.dumps(handshake_reply))
     while True:
-        event = await receive_channel.receive()
-        if not isinstance(event, FileModifiedEvent):
-            continue
+        req = await watcher.receive_channel.receive()
         reload_request = {
             "command": "reload",
-            "path": event.src_path,
+            "path": req.path,
             "liveCSS": True,
         }
-        app.logger.debug(f"file event: %r", event)
-        app.logger.debug(f"sending reload request: %r", reload_request)
+        app.logger.debug(f"reload request: %r", req)
         await websocket.send(json.dumps(reload_request))
 
 
@@ -84,19 +79,7 @@ async def serve_file(pagepath):
     return inject_livereload_js(content)
 
 
-class EventTranslator(FileSystemEventHandler):
-    def __init__(self, send_channel):
-        self.send_channel = send_channel
-        self.trio_token = trio.lowlevel.current_trio_token()
-
-    def on_any_event(self, event):
-        trio.from_thread.run(self.send_channel.send, event, trio_token=self.trio_token)
-
-
 async def start_server(root=".", debug=True, port=8000):
-    send_channel, receive_channel = trio.open_memory_channel(inf)
-
-    app.config["REFRESHER_RELOAD_RECEIVE_CHANNEL"] = receive_channel
     app.config["REFRESHER_ROOT"] = Path(root)
     app.config["DEBUG"] = debug
 
@@ -104,15 +87,8 @@ async def start_server(root=".", debug=True, port=8000):
     cfg.bind = f"localhost:{port}"
     cfg.debug = debug
 
-    event_handler = EventTranslator(send_channel)
-    observer = Observer()
-    observer.schedule(event_handler, root, recursive=True)
-    observer.start()
+    async with open_watcher(root) as watcher:
+        app.config["REFRESHER_WATCHER"] = watcher
 
-    try:
-        async with trio.open_nursery() as nursery:
-            # https://pgjones.gitlab.io/hypercorn/how_to_guides/api_usage.html
-            nursery.start_soon(serve, app, cfg)
-    finally:
-        observer.stop()
-        observer.join(3)
+        # https://pgjones.gitlab.io/hypercorn/how_to_guides/api_usage.html
+        await serve(app, cfg)
