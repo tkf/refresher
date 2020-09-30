@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from logging import getLogger
 from math import inf
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import trio
 from watchdog.events import FileModifiedEvent, FileSystemEventHandler
@@ -13,6 +13,18 @@ if TYPE_CHECKING:
     from watchdog.events import FileSystemEvent
 
 logger = getLogger(__name__)
+
+
+@dataclasses.dataclass
+class Some:
+    value: Any
+
+
+async def tryreceive(channel: trio.MemoryReceiveChannel) -> Optional[Some]:
+    try:
+        return Some(await channel.receive())
+    except trio.ClosedResourceError:
+        return None
 
 
 @dataclasses.dataclass
@@ -89,13 +101,13 @@ async def open_watcher(root: Path):
     observer.schedule(event_handler, root, recursive=True)
     observer.start()
 
-    try:
-        async with trio.open_nursery() as nursery:
+    async with trio.open_nursery() as nursery, file_event_receiver, reload_sender:
+        try:
             nursery.start_soon(watcher_loop, file_event_receiver, reload_sender)
             yield Watcher(root=Path(root), reload_receiver=reload_receiver)
-    finally:
-        observer.stop()
-        observer.join(3)
+        finally:
+            observer.stop()
+            observer.join(3)
 
 
 async def watcher_loop(
@@ -104,11 +116,15 @@ async def watcher_loop(
 ) -> None:
     delay = 0.1
 
-    event: "FileSystemEvent" = await file_event_receiver.receive()
+    if (ans := await tryreceive(file_event_receiver)) is None:
+        return
+    event: "FileSystemEvent" = ans.value
     while True:
         next_event: "Optional[FileSystemEvent]" = None
         with trio.move_on_after(delay):
-            next_event = await file_event_receiver.receive()
+            if (ans := await tryreceive(file_event_receiver)) is None:
+                return
+            next_event = ans.value
         if next_event is not None:
             event = next_event
             logger.debug("Got `%r` before %r seconds. Postpone reload...", event, delay)
@@ -119,6 +135,11 @@ async def watcher_loop(
             delay,
         )
         req = ReloadRequest(event.src_path)
-        await reload_sender.send(req)
+        try:
+            await reload_sender.send(req)
+        except trio.ClosedResourceError:
+            return
 
-        event = await file_event_receiver.receive()
+        if (ans := await tryreceive(file_event_receiver)) is None:
+            return
+        event = ans.value

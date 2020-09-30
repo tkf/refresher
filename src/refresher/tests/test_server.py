@@ -1,7 +1,9 @@
+from ..conftest import DEFAULT_INDEX_HTML_BODY, RefresherTester
 from ..server import app
 
 # See also:
-# https://pgjones.gitlab.io/quart/how_to_guides/testing.html
+# * https://pgjones.gitlab.io/quart/how_to_guides/testing.html
+# * https://pytest-trio.readthedocs.io
 
 
 async def test_livereload_js():
@@ -11,3 +13,18 @@ async def test_livereload_js():
     result = await response.get_data()
     assert result.startswith(b"(function()")
     assert b"livereload" in result
+
+
+async def test_cache(refresher: RefresherTester):
+    app = refresher.app
+    test_client = app.test_client()
+
+    response0 = await test_client.get("/")
+    result0: bytes = await response0.get_data()
+    assert DEFAULT_INDEX_HTML_BODY in result0.decode()
+
+    (refresher.root / "index.html").unlink()
+
+    response1 = await test_client.get("/")
+    result1: bytes = await response1.get_data()
+    assert DEFAULT_INDEX_HTML_BODY in result1.decode()
