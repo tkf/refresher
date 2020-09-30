@@ -2,10 +2,14 @@ import dataclasses
 from contextlib import asynccontextmanager
 from math import inf
 from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 
 import trio
 from watchdog.events import FileModifiedEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+
+if TYPE_CHECKING:
+    from watchdog.events import FileSystemEvent
 
 
 @dataclasses.dataclass
@@ -20,9 +24,8 @@ class EventTranslator(FileSystemEventHandler):
 
     def on_modified(self, event):
         if isinstance(event, FileModifiedEvent):
-            req = ReloadRequest(event.src_path)
             trio.from_thread.run(
-                self.file_event_sender.send, req, trio_token=self.trio_token
+                self.file_event_sender.send, event, trio_token=self.trio_token
             )
 
 
@@ -47,13 +50,13 @@ class Page:
 @dataclasses.dataclass
 class Watcher:
     root: Path
-    file_event_receiver: trio.MemoryReceiveChannel
+    reload_receiver: trio.MemoryReceiveChannel
 
     def __post_init__(self):
         self.cache = {}
 
     async def get_request(self):
-        return await self.file_event_receiver.receive()
+        return await self.reload_receiver.receive()
 
     async def get_page(self, pagepath: str):
         parts = list(pagepath.split("/"))
@@ -76,6 +79,7 @@ class Watcher:
 @asynccontextmanager
 async def open_watcher(root: Path):
     file_event_sender, file_event_receiver = trio.open_memory_channel(inf)
+    reload_sender, reload_receiver = trio.open_memory_channel(inf)
 
     event_handler = EventTranslator(file_event_sender)
     observer = Observer()
@@ -83,7 +87,31 @@ async def open_watcher(root: Path):
     observer.start()
 
     try:
-        yield Watcher(root=Path(root), file_event_receiver=file_event_receiver)
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(watcher_loop, file_event_receiver, reload_sender)
+            yield Watcher(root=Path(root), reload_receiver=reload_receiver)
     finally:
         observer.stop()
         observer.join(3)
+
+
+async def watcher_loop(
+    file_event_receiver: "trio.MemoryReceiveChannel",
+    reload_sender: "trio.MemorySendChannel",
+) -> None:
+    delay = 0.1
+
+    event: "FileSystemEvent" = await file_event_receiver.receive()
+    while True:
+        next_event: "Optional[FileSystemEvent]" = None
+        with trio.move_on_after(delay):
+            next_event = await file_event_receiver.receive()
+        if next_event is not None:
+            event = next_event
+            continue
+
+        # No file change happened `delay` seconds. Requesting reload.
+        req = ReloadRequest(event.src_path)
+        await reload_sender.send(req)
+
+        event = await file_event_receiver.receive()
