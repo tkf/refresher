@@ -19,14 +19,20 @@ logger = getLogger(__name__)
 @app.websocket("/livereload")
 async def livereload_websocket():
     watcher = app.config["REFRESHER_WATCHER"]
-    data = await websocket.receive()
-    logger.debug(f"livereload_websocket: {data =}")
+
+    handshake_request = json.loads(await websocket.receive())
+    logger.debug("handshake_request: %r", handshake_request)
+    client_protocols = handshake_request.get("protocols", [])
+    if "http://livereload.com/protocols/official-7" not in client_protocols:
+        raise RuntimeError(f"Unsupported protocols: {client_protocols}")
+
     handshake_reply = {
         "command": "hello",
         "protocols": ["http://livereload.com/protocols/official-7"],
         "serverName": "refresher",
     }
     await websocket.send(json.dumps(handshake_reply))
+
     while True:
         req = await watcher.get_request()
         reload_request = {
