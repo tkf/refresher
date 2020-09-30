@@ -7,7 +7,7 @@ from ..server import app
 async def test_livereload_js():
     test_client = app.test_client()
     response = await test_client.get("/livereload.js")
-    assert response.status_code == 201
+    assert response.status_code == 200
     result = await response.get_data()
-    assert result.startswith("(function())")
-    assert "livereload" in result
+    assert result.startswith(b"(function()")
+    assert b"livereload" in result
