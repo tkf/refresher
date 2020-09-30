@@ -70,6 +70,9 @@ class Watcher:
     def __post_init__(self):
         self.cache = {}
 
+    def invalidate_page(self, pagepath: str):
+        self.cache.pop(pagepath, None)
+
     async def get_request(self):
         return await self.reload_receiver.receive()
 

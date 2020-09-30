@@ -95,6 +95,10 @@ def current_port(request=request) -> int:
 @app.route("/<path:pagepath>")
 async def serve_file(pagepath) -> ResponseReturnValue:
     watcher: Watcher = app.config["REFRESHER_WATCHER"]
+    if request.cache_control.no_cache:
+        # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control
+        logger.info("Invalidating page: %s", pagepath)
+        watcher.invalidate_page(pagepath)
     try:
         page = await watcher.get_page(pagepath)
     except PageNotFound as err:
