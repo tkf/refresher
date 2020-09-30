@@ -55,7 +55,7 @@ class PageNotFound(Exception):
 @dataclasses.dataclass
 class Page:
     filepath: Path
-    content: bytes
+    content: bytes = dataclasses.field(repr=False)
     is_cached: bool = False
 
     def is_html(self):

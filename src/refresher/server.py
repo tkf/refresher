@@ -41,7 +41,8 @@ async def livereload_websocket() -> NoReturn:
             "path": req.path,
             "liveCSS": True,
         }
-        logger.debug("reload request: %r", req)
+        logger.info("Reloading: %s", req.path)
+        logger.debug("req = %r", req)
         await websocket.send(json.dumps(reload_request))
 
 
@@ -99,8 +100,9 @@ async def serve_file(pagepath) -> ResponseReturnValue:
     except PageNotFound as err:
         logger.debug("%s", err)
         return f"Not Found: {pagepath}", 404
+    logger.debug("page = %r", page)
     if page.is_cached:
-        logger.debug("Serving cached page: %s", pagepath)
+        logger.info("Serving cached page: %s", pagepath)
     if page.is_html:
         port = current_port()
         return inject_livereload_js(page.content, port)
@@ -116,6 +118,7 @@ async def start_server(root: str, debug: bool, port: int) -> None:
 
     async with open_watcher(root) as watcher:
         app.config["REFRESHER_WATCHER"] = watcher
+        logger.info("Serving and watching: %s", watcher.root.resolve())
 
         # https://pgjones.gitlab.io/hypercorn/how_to_guides/api_usage.html
         await serve(app, cfg)
