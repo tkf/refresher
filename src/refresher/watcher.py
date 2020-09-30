@@ -1,5 +1,6 @@
 import dataclasses
 from contextlib import asynccontextmanager
+from logging import getLogger
 from math import inf
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -10,6 +11,8 @@ from watchdog.observers import Observer
 
 if TYPE_CHECKING:
     from watchdog.events import FileSystemEvent
+
+logger = getLogger(__name__)
 
 
 @dataclasses.dataclass
@@ -108,9 +111,13 @@ async def watcher_loop(
             next_event = await file_event_receiver.receive()
         if next_event is not None:
             event = next_event
+            logger.debug("Got `%r` before %r seconds. Postpone reload...", event, delay)
             continue
 
-        # No file change happened `delay` seconds. Requesting reload.
+        logger.debug(
+            "No file changes happened within delay=%r seconds. Requesting reload...",
+            delay,
+        )
         req = ReloadRequest(event.src_path)
         await reload_sender.send(req)
 
