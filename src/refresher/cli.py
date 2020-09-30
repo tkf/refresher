@@ -71,11 +71,19 @@ def preprocess_kwargs(*, port, **kwargs):
 def run_cli(*, command, **kwargs):
     import logging
 
+    from rich.logging import RichHandler
+
     if kwargs.get("debug", False):
         level = logging.DEBUG
     else:
         level = logging.INFO
-    logging.basicConfig(level=level)
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(rich_tracebacks=True)],
+    )
+    # https://rich.readthedocs.io/en/latest/logging.html
 
     command(**preprocess_kwargs(**kwargs))
 
