@@ -2,11 +2,11 @@ import json
 import re
 from logging import getLogger
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, Optional
 
 from hypercorn.config import Config
 from hypercorn.trio import serve
-from quart import ResponseReturnValue, websocket
+from quart import ResponseReturnValue, request, websocket
 from quart_trio import QuartTrio
 
 from .watcher import PageNotFound, Watcher, open_watcher
@@ -70,6 +70,26 @@ def inject_livereload_js(content: bytes, port: int) -> bytes:
     return content[:i] + scr + content[i:]
 
 
+host_port_re = re.compile(".*:([0-9]+)$")
+
+
+def port_from_host(host: str) -> Optional[int]:
+    m = host_port_re.match(host)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def current_port(request=request) -> int:
+    port = port_from_host(request.host)
+    if port is not None:
+        return port
+    if request.scheme == "https":
+        return 443
+    else:
+        return 80
+
+
 @app.route("/", defaults={"pagepath": ""})
 @app.route("/<path:pagepath>")
 async def serve_file(pagepath) -> ResponseReturnValue:
@@ -82,14 +102,13 @@ async def serve_file(pagepath) -> ResponseReturnValue:
     if page.is_cached:
         logger.debug("Serving cached page: %s", pagepath)
     if page.is_html:
-        port = app.config["REFRESHER_PORT"]  # FIXME
+        port = current_port()
         return inject_livereload_js(page.content, port)
     else:
         return page.content
 
 
 async def start_server(root: str, debug: bool, port: int) -> None:
-    app.config["REFRESHER_PORT"] = port
     app.config["DEBUG"] = debug
 
     cfg = Config()
