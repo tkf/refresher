@@ -94,7 +94,6 @@ async def start_server(root: str, debug: bool, port: int) -> None:
 
     cfg = Config()
     cfg.bind = [f"localhost:{port}"]
-    cfg.debug = debug
 
     async with open_watcher(root) as watcher:
         app.config["REFRESHER_WATCHER"] = watcher
