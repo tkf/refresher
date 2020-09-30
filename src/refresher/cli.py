@@ -199,4 +199,7 @@ def parse_args(args=None):
 
 
 def main(args=None):
-    run_cli(**vars(parse_args(args)))
+    try:
+        run_cli(**vars(parse_args(args)))
+    except KeyboardInterrupt:
+        pass
