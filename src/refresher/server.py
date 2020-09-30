@@ -1,3 +1,4 @@
+import html
 import json
 import re
 from logging import getLogger
@@ -71,6 +72,14 @@ def inject_livereload_js(content: bytes, port: int) -> bytes:
     return content[:i] + scr + content[i:]
 
 
+def notfound_page(pagepath: str, port: int) -> ResponseReturnValue:
+    scr = script_livereload_js.format(port=port)
+    return (
+        f"<html>{scr}<body><h1>Not found: <code>/{html.escape(pagepath)}</code></h1>",
+        404,
+    )
+
+
 host_port_re = re.compile(".*:([0-9]+)$")
 
 
@@ -95,6 +104,7 @@ def current_port(request=request) -> int:
 @app.route("/<path:pagepath>")
 async def serve_file(pagepath) -> ResponseReturnValue:
     watcher: Watcher = app.config["REFRESHER_WATCHER"]
+    port = current_port()
     if request.cache_control.no_cache:
         # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control
         logger.info("Invalidating page: %s", pagepath)
@@ -103,12 +113,11 @@ async def serve_file(pagepath) -> ResponseReturnValue:
         page = await watcher.get_page(pagepath)
     except PageNotFound as err:
         logger.debug("%s", err)
-        return f"Not Found: {pagepath}", 404
+        return notfound_page(pagepath, port)
     logger.debug("page = %r", page)
     if page.is_cached:
         logger.info("Serving cached page: %s", pagepath)
     if page.is_html:
-        port = current_port()
         return inject_livereload_js(page.content, port)
     else:
         return page.content
