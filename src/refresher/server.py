@@ -7,7 +7,7 @@ from hypercorn.trio import serve
 from quart import websocket
 from quart_trio import QuartTrio
 
-from .watcher import open_watcher
+from .watcher import PageNotFound, Watcher, open_watcher
 
 app = QuartTrio(__name__)
 # TODO: ASGI app
@@ -25,7 +25,7 @@ async def livereload_websocket():
     }
     await websocket.send(json.dumps(handshake_reply))
     while True:
-        req = await watcher.receive_channel.receive()
+        req = await watcher.get_request()
         reload_request = {
             "command": "reload",
             "path": req.path,
@@ -41,7 +41,7 @@ async def livereload_js():
         return file.read()
 
 
-html_tag_re = re.compile("<html[^>]*>", re.IGNORECASE)
+html_tag_re = re.compile(b"<html[^>]*>", re.IGNORECASE)
 
 script_livereload_js = """
 <script>document.write('<script src="http://'
@@ -52,37 +52,34 @@ script_livereload_js = """
 
 
 def inject_livereload_js(content, port):
+    scr = script_livereload_js.format(port=port).encode("ascii")
     m = html_tag_re.search(content)
     if not m:
-        return script_livereload_js.format(port=port) + content  # FIXME
+        return scr + content  # FIXME
     i = m.end()
-    return content[:i] + script_livereload_js.format(port=port) + content[i:]
+    return content[:i] + scr + content[i:]
 
 
 @app.route("/", defaults={"pagepath": ""})
 @app.route("/<path:pagepath>")
 async def serve_file(pagepath):
-    parts = list(pagepath.split("/"))
-    if parts[-1] == "":
-        parts[-1] = "index.html"  # FIXME
-    root = app.config["REFRESHER_ROOT"]
-    filepath = root.joinpath(*parts)
-    app.logger.debug(
-        "pagepath = %s, parts = %r, filepath = %s", pagepath, parts, filepath
-    )
-    if not filepath.is_file():
-        app.logger.debug("File not found: %s", filepath)
+    watcher: Watcher = app.config["REFRESHER_WATCHER"]
+    try:
+        page = await watcher.get_page(pagepath)
+    except PageNotFound as err:
+        app.logger.debug("%s", err)
         return f"Not Found: {pagepath}", 404
-    content = filepath.read_text()
-    if filepath.suffix.lower() not in (".html", ".htm"):
-        return content
-    port = app.config["REFRESHER_PORT"]  # FIXME
-    return inject_livereload_js(content, port)
+    if page.is_cached:
+        app.logger.debug("Serving cached page: %s", pagepath)
+    if page.is_html:
+        port = app.config["REFRESHER_PORT"]  # FIXME
+        return inject_livereload_js(page.content, port)
+    else:
+        return page.content
 
 
 async def start_server(root, debug, port):
     app.config["REFRESHER_PORT"] = port
-    app.config["REFRESHER_ROOT"] = Path(root)
     app.config["DEBUG"] = debug
 
     cfg = Config()
