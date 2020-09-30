@@ -31,7 +31,7 @@ async def livereload_websocket():
             "path": req.path,
             "liveCSS": True,
         }
-        app.logger.debug(f"reload request: %r", req)
+        app.logger.debug("reload request: %r", req)
         await websocket.send(json.dumps(reload_request))
 
 
