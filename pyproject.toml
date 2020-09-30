@@ -6,9 +6,15 @@ authors = ["Takafumi Arakaki <aka.tkf@gmail.com>"]
 
 [tool.poetry.dependencies]
 python = "^3.8"
+trio = "^0.17.0"
+Hypercorn = "^0.10"
+Quart-Trio = "^0.5.1"
+watchdog = "^0.10.3"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
+ipython = "^7.18.1"
+ipdb = "^0.13.3"
 
 [tool.poetry.scripts]
 refresher = "refresher.cli:main"
