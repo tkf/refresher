@@ -2,10 +2,11 @@ import json
 import re
 from logging import getLogger
 from pathlib import Path
+from typing import NoReturn
 
 from hypercorn.config import Config
 from hypercorn.trio import serve
-from quart import websocket
+from quart import ResponseReturnValue, websocket
 from quart_trio import QuartTrio
 
 from .watcher import PageNotFound, Watcher, open_watcher
@@ -17,8 +18,8 @@ logger = getLogger(__name__)
 
 
 @app.websocket("/livereload")
-async def livereload_websocket():
-    watcher = app.config["REFRESHER_WATCHER"]
+async def livereload_websocket() -> NoReturn:
+    watcher: Watcher = app.config["REFRESHER_WATCHER"]
 
     handshake_request = json.loads(await websocket.receive())
     logger.debug("handshake_request: %r", handshake_request)
@@ -45,7 +46,7 @@ async def livereload_websocket():
 
 
 @app.route("/livereload.js")
-async def livereload_js():
+async def livereload_js() -> ResponseReturnValue:
     with open(Path(__file__).parent / "assets" / "livereload.js") as file:
         return file.read()
 
@@ -60,7 +61,7 @@ script_livereload_js = """
 """
 
 
-def inject_livereload_js(content, port):
+def inject_livereload_js(content: bytes, port: int) -> bytes:
     scr = script_livereload_js.format(port=port).encode("ascii")
     m = html_tag_re.search(content)
     if not m:
@@ -71,7 +72,7 @@ def inject_livereload_js(content, port):
 
 @app.route("/", defaults={"pagepath": ""})
 @app.route("/<path:pagepath>")
-async def serve_file(pagepath):
+async def serve_file(pagepath) -> ResponseReturnValue:
     watcher: Watcher = app.config["REFRESHER_WATCHER"]
     try:
         page = await watcher.get_page(pagepath)
@@ -87,12 +88,12 @@ async def serve_file(pagepath):
         return page.content
 
 
-async def start_server(root, debug, port):
+async def start_server(root: str, debug: bool, port: int) -> None:
     app.config["REFRESHER_PORT"] = port
     app.config["DEBUG"] = debug
 
     cfg = Config()
-    cfg.bind = f"localhost:{port}"
+    cfg.bind = [f"localhost:{port}"]
     cfg.debug = debug
 
     async with open_watcher(root) as watcher:
