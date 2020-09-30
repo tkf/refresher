@@ -1,5 +1,6 @@
 import json
 import re
+from logging import getLogger
 from pathlib import Path
 
 from hypercorn.config import Config
@@ -12,12 +13,14 @@ from .watcher import PageNotFound, Watcher, open_watcher
 app = QuartTrio(__name__)
 # TODO: ASGI app
 
+logger = getLogger(__name__)
+
 
 @app.websocket("/livereload")
 async def livereload_websocket():
     watcher = app.config["REFRESHER_WATCHER"]
     data = await websocket.receive()
-    app.logger.debug(f"livereload_websocket: {data =}")
+    logger.debug(f"livereload_websocket: {data =}")
     handshake_reply = {
         "command": "hello",
         "protocols": ["http://livereload.com/protocols/official-7"],
@@ -31,7 +34,7 @@ async def livereload_websocket():
             "path": req.path,
             "liveCSS": True,
         }
-        app.logger.debug("reload request: %r", req)
+        logger.debug("reload request: %r", req)
         await websocket.send(json.dumps(reload_request))
 
 
@@ -67,10 +70,10 @@ async def serve_file(pagepath):
     try:
         page = await watcher.get_page(pagepath)
     except PageNotFound as err:
-        app.logger.debug("%s", err)
+        logger.debug("%s", err)
         return f"Not Found: {pagepath}", 404
     if page.is_cached:
-        app.logger.debug("Serving cached page: %s", pagepath)
+        logger.debug("Serving cached page: %s", pagepath)
     if page.is_html:
         port = app.config["REFRESHER_PORT"]  # FIXME
         return inject_livereload_js(page.content, port)

@@ -68,6 +68,18 @@ def preprocess_kwargs(*, port, **kwargs):
     return kwargs
 
 
+def run_cli(*, command, **kwargs):
+    import logging
+
+    if kwargs.get("debug", False):
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+    logging.basicConfig(level=level)
+
+    command(**preprocess_kwargs(**kwargs))
+
+
 def parse_args(args=None):
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter, description=__doc__
@@ -175,11 +187,8 @@ def parse_args(args=None):
     if not args:
         args = ["serve"]  # so that default above are used
 
-    ns = parser.parse_args(args)
-    kwargs = vars(ns)
-    return kwargs.pop("command"), preprocess_kwargs(**kwargs)
+    return parser.parse_args(args)
 
 
 def main(args=None):
-    command, kwargs = parse_args(args)
-    command(**kwargs)
+    run_cli(**vars(parse_args(args)))
