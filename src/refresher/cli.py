@@ -1,2 +1,7 @@
+import trio
+
+from .server import start_server
+
+
 def main():
-    pass
+    trio.run(start_server)
