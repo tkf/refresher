@@ -1,5 +1,6 @@
 import html
 import json
+import mimetypes
 import re
 from logging import getLogger
 from pathlib import Path
@@ -120,7 +121,15 @@ async def serve_file(pagepath) -> ResponseReturnValue:
     if page.is_html:
         return inject_livereload_js(page.content, port)
     else:
-        return page.content
+        mime, encoding = mimetypes.guess_type(page.filepath)
+        if not mime:
+            mime, encoding = mimetypes.guess_type(pagepath)
+        header = {}
+        if mime:
+            header["Content-Type"] = mime
+        if encoding:
+            header["Content-Encoding"] = encoding
+        return page.content, 200, header
 
 
 async def start_server(root: str, debug: bool, port: int) -> None:
