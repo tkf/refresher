@@ -54,7 +54,7 @@ async def livereload_js() -> ResponseReturnValue:
         return file.read()
 
 
-html_tag_re = re.compile(b"<html[^>]*>", re.IGNORECASE)
+close_tag_re = re.compile(b"</(body|html)>", re.IGNORECASE)
 
 script_livereload_js = """
 <script>document.write('<script src="http://'
@@ -66,10 +66,10 @@ script_livereload_js = """
 
 def inject_livereload_js(content: bytes, port: int) -> bytes:
     scr = script_livereload_js.format(port=port).encode("ascii")
-    m = html_tag_re.search(content)
+    m = close_tag_re.search(content)
     if not m:
-        return scr + content  # FIXME
-    i = m.end()
+        return content + scr
+    i = m.start() - 1
     return content[:i] + scr + content[i:]
 
 
