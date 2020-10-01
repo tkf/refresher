@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import trio
+from async_generator import aclosing
 from watchdog.events import EVENT_TYPE_DELETED, EVENT_TYPE_MOVED
 
 from .trio_watchdog import open_file_events
@@ -142,32 +143,36 @@ async def watcher_loop(
         x async for x in file_event_receiver if x.event_type != EVENT_TYPE_DELETED
     )
 
-    if (ans := await trynext(filtered_events)) is None:
-        return
-    req: ReloadRequest = ReloadRequest.from_event(ans.value)
-
-    while True:
-        next_event: "Optional[FileSystemEvent]" = None
-        with trio.move_on_after(delay):
-            if (ans := await trynext(filtered_events)) is None:
-                return
-            next_event = ans.value
-        if next_event is not None:
-            req.add_event(next_event)
-            logger.debug(
-                "Got `%r` before %r seconds. Postpone reload...", next_event, delay
-            )
-            continue
-
-        logger.debug(
-            "No file changes happened within delay=%r seconds. Requesting reload...",
-            delay,
-        )
-        try:
-            await reload_sender.send(req)
-        except trio.ClosedResourceError:
-            return
+    # For `aclosing`, see:
+    # https://trio.readthedocs.io/en/stable/reference-core.html#finalization
+    async with aclosing(filtered_events):
 
         if (ans := await trynext(filtered_events)) is None:
             return
-        req = ReloadRequest.from_event(ans.value)
+        req: ReloadRequest = ReloadRequest.from_event(ans.value)
+
+        while True:
+            next_event: "Optional[FileSystemEvent]" = None
+            with trio.move_on_after(delay):
+                if (ans := await trynext(filtered_events)) is None:
+                    return
+                next_event = ans.value
+            if next_event is not None:
+                req.add_event(next_event)
+                logger.debug(
+                    "Got `%r` before %r seconds. Postpone reload...", next_event, delay
+                )
+                continue
+
+            logger.debug(
+                "No file changes happened within delay=%r seconds. Requesting reload...",
+                delay,
+            )
+            try:
+                await reload_sender.send(req)
+            except trio.ClosedResourceError:
+                return
+
+            if (ans := await trynext(filtered_events)) is None:
+                return
+            req = ReloadRequest.from_event(ans.value)
