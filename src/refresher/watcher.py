@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from logging import getLogger
 from math import inf
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import trio
 from watchdog.events import EVENT_TYPE_DELETED, EVENT_TYPE_MOVED, FileSystemEventHandler
@@ -25,11 +25,6 @@ async def tryreceive(channel: trio.MemoryReceiveChannel) -> Optional[Some]:
         return Some(await channel.receive())
     except trio.ClosedResourceError:
         return None
-
-
-@dataclasses.dataclass
-class ReloadRequest:
-    path: str
 
 
 class EventTranslator(FileSystemEventHandler):
@@ -58,6 +53,10 @@ class PageNotFound(Exception):
         return f"File not found: {self.filepath}"
 
 
+def is_html(path: Union[Path, str]) -> bool:
+    return Path(path).suffix.lower() in (".html", ".htm")
+
+
 @dataclasses.dataclass
 class Page:
     filepath: Path
@@ -65,7 +64,7 @@ class Page:
     is_cached: bool = False
 
     def is_html(self):
-        return self.filepath.suffix.lower() in (".html", ".htm")
+        return is_html(self.filepath)
 
 
 @dataclasses.dataclass
@@ -119,6 +118,40 @@ async def open_watcher(root: Path):
             observer.join(3)
 
 
+class ReloadRequest:
+    path: str
+
+    def __init__(self, path: str):
+        self.path = path
+        self.updated = [path]
+
+    def add_path(self, path: str):
+        if path not in self.updated:
+            self.updated.append(path)
+        if self.path is None or is_html(path):
+            # Latest HTML path; if not HTML files are updated, latest
+            # path of any file type:
+            self.path = path
+
+    def add_event(self, event: "FileSystemEvent"):
+        self.add_path(event_path(event))
+
+    @classmethod
+    def from_event(cls, event: "FileSystemEvent") -> "ReloadRequest":
+        return cls(event_path(event))
+
+    def __repr__(self):
+        return f"<{type(self).__name__}: {self.path!r}>"
+
+
+def event_path(event: "FileSystemEvent"):
+    if event.event_type == EVENT_TYPE_MOVED:
+        return event.dest_path
+    else:
+        # Created or modified
+        return event.src_path
+
+
 async def watcher_loop(
     file_event_receiver: "trio.MemoryReceiveChannel",
     reload_sender: "trio.MemorySendChannel",
@@ -127,7 +160,8 @@ async def watcher_loop(
 
     if (ans := await tryreceive(file_event_receiver)) is None:
         return
-    event: "FileSystemEvent" = ans.value
+    req: ReloadRequest = ReloadRequest.from_event(ans.value)
+
     while True:
         next_event: "Optional[FileSystemEvent]" = None
         with trio.move_on_after(delay):
@@ -135,20 +169,16 @@ async def watcher_loop(
                 return
             next_event = ans.value
         if next_event is not None:
-            event = next_event
-            logger.debug("Got `%r` before %r seconds. Postpone reload...", event, delay)
+            req.add_event(next_event)
+            logger.debug(
+                "Got `%r` before %r seconds. Postpone reload...", next_event, delay
+            )
             continue
 
         logger.debug(
             "No file changes happened within delay=%r seconds. Requesting reload...",
             delay,
         )
-        if event.event_type == EVENT_TYPE_MOVED:
-            path = event.dest_path
-        else:
-            # Created or modified
-            path = event.src_path
-        req = ReloadRequest(path)
         try:
             await reload_sender.send(req)
         except trio.ClosedResourceError:
@@ -156,4 +186,4 @@ async def watcher_loop(
 
         if (ans := await tryreceive(file_event_receiver)) is None:
             return
-        event = ans.value
+        req = ReloadRequest.from_event(ans.value)
