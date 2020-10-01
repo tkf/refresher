@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import trio
-from watchdog.events import EVENT_TYPE_DELETED, EVENT_TYPE_MOVED, FileSystemEventHandler
-from watchdog.observers import Observer
+from watchdog.events import EVENT_TYPE_DELETED, EVENT_TYPE_MOVED
+
+from .trio_watchdog import open_file_events
 
 if TYPE_CHECKING:
     from watchdog.events import FileSystemEvent
@@ -20,29 +21,13 @@ class Some:
     value: Any
 
 
-async def tryreceive(channel: trio.MemoryReceiveChannel) -> Optional[Some]:
+async def trynext(aiter) -> Optional[Some]:
     try:
-        return Some(await channel.receive())
+        async for x in aiter:
+            return Some(x)
     except trio.ClosedResourceError:
-        return None
-
-
-class EventTranslator(FileSystemEventHandler):
-    def __init__(self, file_event_sender):
-        self.file_event_sender = file_event_sender
-        self.trio_token = trio.lowlevel.current_trio_token()
-
-    def on_any_event(self, event):
-        if event.event_type == EVENT_TYPE_DELETED:
-            return
-        elif event.is_directory:
-            return
-
-        trio.from_thread.run(
-            self.file_event_sender.send, event, trio_token=self.trio_token
-        )
-        # See:
-        # * https://python-watchdog.readthedocs.io
+        pass
+    return None
 
 
 @dataclasses.dataclass
@@ -101,22 +86,16 @@ class Watcher:
 
 
 @asynccontextmanager
-async def open_watcher(root: Path):
-    file_event_sender, file_event_receiver = trio.open_memory_channel(inf)
+async def open_watcher(root: str):
     reload_sender, reload_receiver = trio.open_memory_channel(inf)
 
-    event_handler = EventTranslator(file_event_sender)
-    observer = Observer()
-    observer.schedule(event_handler, root, recursive=True)
-    observer.start()
-
-    async with trio.open_nursery() as nursery, file_event_receiver, reload_sender:
-        try:
-            nursery.start_soon(watcher_loop, file_event_receiver, reload_sender)
-            yield Watcher(root=Path(root), reload_receiver=reload_receiver)
-        finally:
-            observer.stop()
-            observer.join(3)
+    # fmt: off
+    async with trio.open_nursery() as nursery, \
+            open_file_events(root) as file_event_receiver, \
+            reload_sender:
+        nursery.start_soon(watcher_loop, file_event_receiver, reload_sender)
+        yield Watcher(root=Path(root), reload_receiver=reload_receiver)
+    # fmt: on
 
 
 class ReloadRequest:
@@ -159,14 +138,18 @@ async def watcher_loop(
 ) -> None:
     delay = 0.1
 
-    if (ans := await tryreceive(file_event_receiver)) is None:
+    filtered_events = (
+        x async for x in file_event_receiver if x.event_type != EVENT_TYPE_DELETED
+    )
+
+    if (ans := await trynext(filtered_events)) is None:
         return
     req: ReloadRequest = ReloadRequest.from_event(ans.value)
 
     while True:
         next_event: "Optional[FileSystemEvent]" = None
         with trio.move_on_after(delay):
-            if (ans := await tryreceive(file_event_receiver)) is None:
+            if (ans := await trynext(filtered_events)) is None:
                 return
             next_event = ans.value
         if next_event is not None:
@@ -185,6 +168,6 @@ async def watcher_loop(
         except trio.ClosedResourceError:
             return
 
-        if (ans := await tryreceive(file_event_receiver)) is None:
+        if (ans := await trynext(filtered_events)) is None:
             return
         req = ReloadRequest.from_event(ans.value)
