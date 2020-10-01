@@ -3,16 +3,13 @@ from contextlib import asynccontextmanager
 from logging import getLogger
 from math import inf
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import trio
-from async_generator import aclosing
 from watchdog.events import EVENT_TYPE_DELETED, EVENT_TYPE_MOVED
 
-from .trio_watchdog import open_file_events
-
-if TYPE_CHECKING:
-    from watchdog.events import FileSystemEvent
+from .trio_watchdog import GenericEvent, RootRecreated, open_file_events
+from .utils import abspath
 
 logger = getLogger(__name__)
 
@@ -20,15 +17,6 @@ logger = getLogger(__name__)
 @dataclasses.dataclass
 class Some:
     value: Any
-
-
-async def trynext(aiter) -> Optional[Some]:
-    try:
-        async for x in aiter:
-            return Some(x)
-    except trio.ClosedResourceError:
-        pass
-    return None
 
 
 @dataclasses.dataclass
@@ -60,13 +48,17 @@ class Watcher:
     reload_receiver: trio.MemoryReceiveChannel
 
     def __post_init__(self):
-        self.cache = {}
+        self.cache: Dict[str, Page] = {}
 
     def invalidate_page(self, pagepath: str):
         self.cache.pop(pagepath, None)
 
-    async def get_request(self):
-        return await self.reload_receiver.receive()
+    async def get_request(self) -> "ReloadRequest":
+        req: ReloadRequest = await self.reload_receiver.receive()
+        if req.is_recreated:
+            for pagepath in self.cache:
+                req.add_path(pagepath)
+        return req
 
     async def get_page(self, pagepath: str):
         parts = list(pagepath.split("/"))
@@ -87,7 +79,8 @@ class Watcher:
 
 
 @asynccontextmanager
-async def open_watcher(root: str):
+async def open_watcher(root: Path):
+    root = abspath(root)
     reload_sender, reload_receiver = trio.open_memory_channel(inf)
 
     # fmt: off
@@ -105,6 +98,7 @@ class ReloadRequest:
     def __init__(self, path: str):
         self.path = path
         self.updated = [path]
+        self.is_recreated: bool = False
 
     def add_path(self, path: str):
         if path not in self.updated:
@@ -114,18 +108,25 @@ class ReloadRequest:
             # path of any file type:
             self.path = path
 
-    def add_event(self, event: "FileSystemEvent"):
+    def add_event(self, event: GenericEvent):
         self.add_path(event_path(event))
+        self.maybe_set_recreated(event)
+
+    def maybe_set_recreated(self, event: GenericEvent):
+        if isinstance(event, RootRecreated):
+            self.is_recreated = True
 
     @classmethod
-    def from_event(cls, event: "FileSystemEvent") -> "ReloadRequest":
-        return cls(event_path(event))
+    def from_event(cls, event: GenericEvent) -> "ReloadRequest":
+        self = cls(event_path(event))
+        self.maybe_set_recreated(event)
+        return self
 
     def __repr__(self):
         return f"<{type(self).__name__}: {self.path!r}>"
 
 
-def event_path(event: "FileSystemEvent"):
+def event_path(event: GenericEvent):
     if event.event_type == EVENT_TYPE_MOVED:
         return event.dest_path
     else:
@@ -139,40 +140,43 @@ async def watcher_loop(
 ) -> None:
     delay = 0.1
 
-    filtered_events = (
-        x async for x in file_event_receiver if x.event_type != EVENT_TYPE_DELETED
-    )
+    async def trynext() -> Optional[Some]:
+        try:
+            async for x in file_event_receiver:
+                logger.debug("GOT: %r", x)
+                if x.event_type != EVENT_TYPE_DELETED:
+                    return Some(x)
+        except trio.ClosedResourceError:
+            pass
+        logger.debug("file_event_receiver closed")
+        return None
 
-    # For `aclosing`, see:
-    # https://trio.readthedocs.io/en/stable/reference-core.html#finalization
-    async with aclosing(filtered_events):
+    if (ans := await trynext()) is None:
+        return
+    req: ReloadRequest = ReloadRequest.from_event(ans.value)
 
-        if (ans := await trynext(filtered_events)) is None:
-            return
-        req: ReloadRequest = ReloadRequest.from_event(ans.value)
-
-        while True:
-            next_event: "Optional[FileSystemEvent]" = None
-            with trio.move_on_after(delay):
-                if (ans := await trynext(filtered_events)) is None:
-                    return
-                next_event = ans.value
-            if next_event is not None:
-                req.add_event(next_event)
-                logger.debug(
-                    "Got `%r` before %r seconds. Postpone reload...", next_event, delay
-                )
-                continue
-
+    while True:
+        next_event: "Optional[GenericEvent]" = None
+        with trio.move_on_after(delay):
+            if (ans := await trynext()) is None:
+                return
+            next_event = ans.value
+        if next_event is not None:
+            req.add_event(next_event)
             logger.debug(
-                "No file changes happened within delay=%r seconds. Requesting reload...",
-                delay,
+                "Got `%r` before %r seconds. Postpone reload...", next_event, delay
             )
-            try:
-                await reload_sender.send(req)
-            except trio.ClosedResourceError:
-                return
+            continue
 
-            if (ans := await trynext(filtered_events)) is None:
-                return
-            req = ReloadRequest.from_event(ans.value)
+        logger.debug(
+            "No file changes happened within delay=%r seconds. Requesting reload...",
+            delay,
+        )
+        try:
+            await reload_sender.send(req)
+        except trio.ClosedResourceError:
+            return
+
+        if (ans := await trynext()) is None:
+            return
+        req = ReloadRequest.from_event(ans.value)
