@@ -63,6 +63,7 @@ class Page:
     content: bytes = dataclasses.field(repr=False)
     is_cached: bool = False
 
+    @property
     def is_html(self):
         return is_html(self.filepath)
 
