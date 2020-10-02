@@ -44,8 +44,26 @@ class EventTranslator(FileSystemEventHandler):
         # * https://python-watchdog.readthedocs.io
 
 
+async def stop_observer(observer):
+    t0 = trio.current_time()
+    stop_success = False
+    try:
+        with trio.move_on_after(4) as cleanup_scope:
+            cleanup_scope.shield = True
+            await trio.to_thread.run_sync(observer.stop)
+            await trio.to_thread.run_sync(observer.join, 3)
+            stop_success = True
+    finally:
+        duration = trio.current_time() - t0
+        logger.debug("cleanup_scope.cancel_called = %r", cleanup_scope.cancel_called)
+        if stop_success:
+            logger.debug("Stopping observer took %s seconds.", duration)
+        else:
+            logger.debug("Stopping observer did not finish in %s seconds.", duration)
+
+
 @asynccontextmanager
-async def open_raw_file_events(root: Path, *, recursive: bool):
+async def open_raw_file_events(root: Path, *, recursive: bool, root_nursery):
     logger.debug("open_raw_file_events(%r, recursive=%r)", root, recursive)
     file_event_sender, file_event_receiver = trio.open_memory_channel(inf)
 
@@ -59,43 +77,27 @@ async def open_raw_file_events(root: Path, *, recursive: bool):
             try:
                 yield file_event_receiver
             finally:
-                t0 = trio.current_time()
-                stop_success = False
-                try:
-                    with trio.move_on_after(4) as cleanup_scope:
-                        cleanup_scope.shield = True
-                        await trio.to_thread.run_sync(observer.stop)
-                        await trio.to_thread.run_sync(observer.join, 3)
-                        stop_success = True
-                finally:
-                    duration = trio.current_time() - t0
-                    logger.debug(
-                        "cleanup_scope.cancel_called = %r", cleanup_scope.cancel_called
-                    )
-                    if stop_success:
-                        logger.debug("Stopping observer took %s seconds.", duration)
-                    else:
-                        logger.debug(
-                            "Stopping observer did not finish in %s seconds.", duration
-                        )
+                root_nursery.start_soon(stop_observer, observer)
     finally:
         logger.debug(
             "FINISHING: open_raw_file_events(%r, recursive=%r)", root, recursive
         )
 
 
-async def recursive_restart(async_fn, paths: Sequence[Path]):
+async def recursive_restart(async_fn, paths: Sequence[Path], root_nursery):
     rest = list(paths)
     if not rest:
         await async_fn()
         return
     front = rest.pop(0)
 
-    async with open_raw_file_events(front.parent, recursive=False) as receiver:
+    async with open_raw_file_events(
+        front.parent, recursive=False, root_nursery=root_nursery
+    ) as receiver:
 
         async def recurse():
             async with trio.open_nursery() as nursery:
-                nursery.start_soon(recursive_restart, async_fn, rest)
+                nursery.start_soon(recursive_restart, async_fn, rest, root_nursery)
                 async for event in receiver:
                     logger.debug("%r -> %r", front, event)
                     if (
@@ -159,12 +161,14 @@ async def open_file_events(root: Path):
             await file_event_sender.send(RootRecreated(str(root)))
         isfirst = False
 
-        async with open_raw_file_events(root, recursive=True) as receiver:
+        async with open_raw_file_events(
+            root, recursive=True, root_nursery=nursery
+        ) as receiver:
             async for event in receiver:
                 logger.debug("SEND: %r", event)
                 await file_event_sender.send(event)
 
     async with trio.open_nursery() as nursery, file_event_sender, file_event_receiver:
-        nursery.start_soon(recursive_restart, true_watcher, paths)
+        nursery.start_soon(recursive_restart, true_watcher, paths, nursery)
         yield file_event_receiver
         nursery.cancel_scope.cancel()
