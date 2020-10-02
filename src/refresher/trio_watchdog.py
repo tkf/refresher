@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from logging import getLogger
 from math import inf
 from pathlib import Path
-from typing import Sequence, Union
+from typing import AsyncIterator, Sequence, Union
 
 import trio
 from watchdog.events import (
@@ -44,7 +44,7 @@ class EventTranslator(FileSystemEventHandler):
         # * https://python-watchdog.readthedocs.io
 
 
-async def stop_observer(observer):
+async def stop_observer(observer: Observer) -> None:
     t0 = trio.current_time()
     stop_success = False
     try:
@@ -63,7 +63,9 @@ async def stop_observer(observer):
 
 
 @asynccontextmanager
-async def open_raw_file_events(root: Path, *, recursive: bool, root_nursery):
+async def open_raw_file_events(
+    root: Path, *, recursive: bool, root_nursery
+) -> "AsyncIterator[trio.MemoryReceiveChannel]":
     logger.debug("open_raw_file_events(%r, recursive=%r)", root, recursive)
     file_event_sender, file_event_receiver = trio.open_memory_channel(inf)
 
@@ -84,7 +86,7 @@ async def open_raw_file_events(root: Path, *, recursive: bool, root_nursery):
         )
 
 
-async def recursive_restart(async_fn, paths: Sequence[Path], root_nursery):
+async def recursive_restart(async_fn, paths: Sequence[Path], root_nursery) -> None:
     rest = list(paths)
     if not rest:
         await async_fn()
@@ -144,7 +146,7 @@ async def recursive_restart(async_fn, paths: Sequence[Path], root_nursery):
 
 
 @asynccontextmanager
-async def open_file_events(root: Path):
+async def open_file_events(root: Path) -> "AsyncIterator[trio.MemoryReceiveChannel]":
     root = abspath(root)
 
     paths = list(root.parents)

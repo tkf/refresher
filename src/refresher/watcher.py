@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from logging import getLogger
 from math import inf
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, AsyncIterator, Dict, Optional, Union
 
 import trio
 from watchdog.events import EVENT_TYPE_DELETED, EVENT_TYPE_MOVED
@@ -38,7 +38,7 @@ class Page:
     is_cached: bool = False
 
     @property
-    def is_html(self):
+    def is_html(self) -> bool:
         return is_html(self.filepath)
 
 
@@ -60,7 +60,7 @@ class Watcher:
                 req.add_path(pagepath)
         return req
 
-    async def get_page(self, pagepath: str):
+    async def get_page(self, pagepath: str) -> Page:
         parts = list(pagepath.split("/"))
         if parts[-1] == "":
             parts[-1] = "index.html"  # FIXME
@@ -79,7 +79,7 @@ class Watcher:
 
 
 @asynccontextmanager
-async def open_watcher(root: Path):
+async def open_watcher(root: Path) -> "AsyncIterator[trio.MemoryReceiveChannel]":
     root = abspath(root)
     reload_sender, reload_receiver = trio.open_memory_channel(inf)
 
@@ -122,11 +122,11 @@ class ReloadRequest:
         self.maybe_set_recreated(event)
         return self
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<{type(self).__name__}: {self.path!r}>"
 
 
-def event_path(event: GenericEvent):
+def event_path(event: GenericEvent) -> str:
     if event.event_type == EVENT_TYPE_MOVED:
         return event.dest_path
     else:
