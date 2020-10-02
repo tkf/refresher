@@ -3,6 +3,9 @@ import hashlib
 import os
 import sys
 from functools import partial
+from pathlib import Path
+
+from .utils import ApplicationError
 
 
 def dhash(string):
@@ -19,6 +22,12 @@ def autoport(path):
 
 
 async def command_serve_impl(url, open_browser, open_url_delay, **kwargs):
+    root = Path(kwargs["root"])
+    if not root.exists():
+        raise ApplicationError(f"{root} does not exist")
+    elif not root.is_dir():
+        raise ApplicationError(f"{root} is not a directory")
+
     import trio
 
     from .server import start_server
@@ -201,5 +210,8 @@ def parse_args(args=None):
 def main(args=None):
     try:
         run_cli(**vars(parse_args(args)))
+    except ApplicationError as err:
+        print(err, file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         pass
